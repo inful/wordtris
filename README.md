@@ -100,4 +100,4 @@ See [SPEC.md](./SPEC.md) for full WebSocket protocol specification.
 
 ## License
 
-MIT
+AGPL-3.0

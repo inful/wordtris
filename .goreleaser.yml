@@ -1,0 +1,47 @@
+version: 2
+
+project_name: dagame
+
+builds:
+  - id: unscrambler
+    main: ./cmd/web
+    binary: unscrambler
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+  - id: wordtris
+    main: ./
+    binary: wordtris
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+dockers_v2:
+  - id: docker-unscrambler
+    ids: [unscrambler]
+    images:
+      - ghcr.io/inful/wordtris
+    tags:
+      - "{{ .Tag }}"
+    dockerfile: Dockerfile
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: inful
+    name: wordtris
