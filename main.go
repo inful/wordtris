@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"wordtris/internal/room"
@@ -63,7 +64,18 @@ func main() {
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
 	port := 8080
-	log.Printf("WordTris server starting on http://localhost:%d", port)
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil {
+			port = n
+		}
+	}
+
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://localhost:%d", port)
+	}
+
+	log.Printf("WordTris server starting on %s", baseURL)
 	log.Printf("Word lists available: %v", getWordListNames(wordLists))
 
 	// Setup graceful shutdown
