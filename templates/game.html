@@ -65,6 +65,16 @@
                 <a href="/" class="btn btn-primary">Back to Lobby</a>
             </div>
         </div>
+
+        <div id="touchControls" class="touch-controls">
+            <button class="touch-btn" id="btnLeft" aria-label="Move left">&#8592;</button>
+            <div class="touch-btn-center">
+                <button class="touch-btn touch-btn-rotate" id="btnRotate" aria-label="Rotate">&#8635;</button>
+                <button class="touch-btn touch-btn-drop" id="btnDrop" aria-label="Drop">&#8595;</button>
+                <button class="touch-btn touch-btn-harddrop" id="btnHardDrop" aria-label="Hard drop">&#8897;</button>
+            </div>
+            <button class="touch-btn" id="btnRight" aria-label="Move right">&#8594;</button>
+        </div>
     </div>
 
     <script>
@@ -766,7 +776,64 @@
                     break;
             }
         });
-        
+
+        // Touch button controls
+        function addTouchBtn(id, action) {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            let repeatTimer = null;
+            const start = (e) => {
+                e.preventDefault();
+                action();
+                if (id === 'btnLeft' || id === 'btnRight') {
+                    repeatTimer = setInterval(action, 120);
+                }
+            };
+            const stop = () => { if (repeatTimer) { clearInterval(repeatTimer); repeatTimer = null; } };
+            btn.addEventListener('touchstart', start, { passive: false });
+            btn.addEventListener('touchend', stop, { passive: false });
+            btn.addEventListener('mousedown', start);
+            btn.addEventListener('mouseup', stop);
+            btn.addEventListener('mouseleave', stop);
+        }
+        addTouchBtn('btnLeft',     () => { if (currentBlock && gameState === 'playing' && canMoveTo(currentBlockX - 1, currentBlockY)) { currentBlockX--; showFallingBlock(); } });
+        addTouchBtn('btnRight',    () => { if (currentBlock && gameState === 'playing' && canMoveTo(currentBlockX + 1, currentBlockY)) { currentBlockX++; showFallingBlock(); } });
+        addTouchBtn('btnRotate',   () => { if (currentBlock && gameState === 'playing') rotateBlock(); });
+        addTouchBtn('btnDrop',     () => { if (currentBlock && gameState === 'playing' && !isDropCooldownActive()) dropBlock(); });
+        addTouchBtn('btnHardDrop', () => { if (currentBlock && gameState === 'playing' && !isDropCooldownActive()) hardDrop(); });
+
+        // Swipe gesture controls on the board
+        (function() {
+            const board = document.getElementById('gameBoard');
+            let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+            const SWIPE_THRESHOLD = 30;
+            const TAP_THRESHOLD = 10;
+            const TAP_TIME = 250;
+
+            board.addEventListener('touchstart', (e) => {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                touchStartTime = Date.now();
+            }, { passive: true });
+
+            board.addEventListener('touchend', (e) => {
+                if (!currentBlock || gameState !== 'playing') return;
+                const dx = e.changedTouches[0].clientX - touchStartX;
+                const dy = e.changedTouches[0].clientY - touchStartY;
+                const dt = Date.now() - touchStartTime;
+                const absDx = Math.abs(dx), absDy = Math.abs(dy);
+
+                if (absDx < TAP_THRESHOLD && absDy < TAP_THRESHOLD && dt < TAP_TIME) {
+                    rotateBlock();
+                } else if (absDx > absDy && absDx > SWIPE_THRESHOLD) {
+                    if (dx < 0 && canMoveTo(currentBlockX - 1, currentBlockY)) { currentBlockX--; showFallingBlock(); }
+                    else if (dx > 0 && canMoveTo(currentBlockX + 1, currentBlockY)) { currentBlockX++; showFallingBlock(); }
+                } else if (absDy > absDx && dy > SWIPE_THRESHOLD) {
+                    if (!isDropCooldownActive()) dropBlock();
+                }
+            }, { passive: true });
+        })();
+
         function canMoveTo(x, y) {
             const positions = getBlockPositions(x, y);
             for (const pos of positions) {
