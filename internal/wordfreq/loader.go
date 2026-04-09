@@ -12,7 +12,6 @@ import (
 
 type WordList struct {
 	Name        string
-	Words       map[string]bool
 	Trie        *Trie
 	UnigramFreq UnigramFreq
 	BigramFreq  BigramFreq
@@ -126,16 +125,17 @@ func LoadWordListsFS(fsys fs.FS, dir string) (map[string]*WordList, error) {
 
 func loadWordListReader(r io.Reader, name string) (*WordList, error) {
 	var words []string
-	wordSet := make(map[string]bool)
+	seen := make(map[string]bool)
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		word := strings.ToLower(strings.TrimSpace(scanner.Text()))
-		if len(word) > 2 && !wordSet[word] {
-			wordSet[word] = true
+		if len(word) > 2 && !seen[word] {
+			seen[word] = true
 			words = append(words, word)
 		}
 	}
+	seen = nil // free dedup map
 
 	trie := NewTrie()
 	for _, word := range words {
@@ -160,7 +160,6 @@ func loadWordListReader(r io.Reader, name string) (*WordList, error) {
 
 	return &WordList{
 		Name:        name,
-		Words:       wordSet,
 		Trie:        trie,
 		UnigramFreq: unigramFreq,
 		BigramFreq:  bigramFreq,

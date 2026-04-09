@@ -7,7 +7,6 @@ import (
 type TrieNode struct {
 	children map[rune]*TrieNode
 	isEnd    bool
-	word     string
 }
 
 func NewTrieNode() *TrieNode {
@@ -25,7 +24,6 @@ func (t *TrieNode) Insert(word string) {
 		node = node.children[ch]
 	}
 	node.isEnd = true
-	node.word = strings.ToLower(word)
 }
 
 func (t *TrieNode) Search(word string) bool {
@@ -55,16 +53,16 @@ func (t *TrieNode) FindWordsWithPrefix(prefix string) []string {
 		return nil
 	}
 	var results []string
-	t.collectWords(node, &results)
+	collectWords(node, []rune(strings.ToLower(prefix)), &results)
 	return results
 }
 
-func (t *TrieNode) collectWords(node *TrieNode, results *[]string) {
+func collectWords(node *TrieNode, prefix []rune, results *[]string) {
 	if node.isEnd {
-		*results = append(*results, node.word)
+		*results = append(*results, string(prefix))
 	}
-	for _, child := range node.children {
-		t.collectWords(child, results)
+	for ch, child := range node.children {
+		collectWords(child, append(prefix, ch), results)
 	}
 }
 
@@ -78,7 +76,6 @@ func (t *TrieNode) removeRecursive(word string, index int) bool {
 			return false
 		}
 		t.isEnd = false
-		t.word = ""
 		return len(t.children) == 0
 	}
 	ch := rune(word[index])
@@ -124,6 +121,6 @@ func (t *Trie) Remove(word string) bool {
 
 func (t *Trie) GetAllWords() []string {
 	var results []string
-	t.root.collectWords(t.root, &results)
+	collectWords(t.root, nil, &results)
 	return results
 }

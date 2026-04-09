@@ -7,14 +7,12 @@ import (
 
 func createTestWordList(t *testing.T) *wordfreq.WordList {
 	wl := &wordfreq.WordList{
-		Name:  "test",
-		Words: make(map[string]bool),
-		Trie:  wordfreq.NewTrie(),
+		Name: "test",
+		Trie: wordfreq.NewTrie(),
 	}
 
 	words := []string{"hello", "world", "hell", "low", "or", "he", "we", "at", "cat", "act", "tac"}
 	for _, w := range words {
-		wl.Words[w] = true
 		wl.Trie.Insert(w)
 	}
 
@@ -286,14 +284,12 @@ func TestRemoveMatchesOutOfBounds(t *testing.T) {
 
 func createTestWordListForBenchmark(b *testing.B) *wordfreq.WordList {
 	wl := &wordfreq.WordList{
-		Name:  "test",
-		Words: make(map[string]bool),
-		Trie:  wordfreq.NewTrie(),
+		Name: "test",
+		Trie: wordfreq.NewTrie(),
 	}
 
 	words := []string{"hello", "world", "hell", "low", "or", "he", "we", "at", "cat", "act", "tac"}
 	for _, w := range words {
-		wl.Words[w] = true
 		wl.Trie.Insert(w)
 	}
 

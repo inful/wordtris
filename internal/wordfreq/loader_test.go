@@ -104,9 +104,8 @@ func TestLoadWordListsSkipsNonTxt(t *testing.T) {
 
 func TestWordListContains(t *testing.T) {
 	wl := &WordList{
-		Name:  "test",
-		Words: map[string]bool{"hello": true, "world": true},
-		Trie:  NewTrie(),
+		Name: "test",
+		Trie: NewTrie(),
 	}
 	wl.Trie.Insert("hello")
 	wl.Trie.Insert("world")

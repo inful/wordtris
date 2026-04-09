@@ -161,14 +161,8 @@ func createSampleWordList() map[string]*wordfreq.WordList {
 		"hand", "happy", "hard", "heat",
 	}
 
-	wordSet := make(map[string]bool)
-	for _, word := range sampleWords {
-		wordSet[word] = true
-	}
-
 	wl := &wordfreq.WordList{
-		Name:  "sample",
-		Words: wordSet,
+		Name: "sample",
 	}
 
 	// Create trie

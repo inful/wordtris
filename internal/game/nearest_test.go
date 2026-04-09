@@ -7,14 +7,12 @@ import (
 
 func createNearestTestWordList() *wordfreq.WordList {
 	wl := &wordfreq.WordList{
-		Name:  "test",
-		Words: make(map[string]bool),
-		Trie:  wordfreq.NewTrie(),
+		Name: "test",
+		Trie: wordfreq.NewTrie(),
 	}
 
 	words := []string{"cat", "car", "card", "care", "careful", "bat", "rat", "at", "act", "tac"}
 	for _, w := range words {
-		wl.Words[w] = true
 		wl.Trie.Insert(w)
 	}
 

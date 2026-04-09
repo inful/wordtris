@@ -123,7 +123,7 @@ func buildWordFreqWrapper(wl *wordfreq.WordList) *game.WordFreqWrapper {
 		UnigramFreq: make(map[rune]float64),
 		BigramFreq:  make(map[rune]map[rune]float64),
 		IsWord: func(s string) bool {
-			return wl.Words[s]
+			return wl.Trie.Search(s)
 		},
 	}
 

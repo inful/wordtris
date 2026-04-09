@@ -8,14 +8,12 @@ import (
 
 func createTestWordList() *wordfreq.WordList {
 	wl := &wordfreq.WordList{
-		Name:  "test",
-		Words: make(map[string]bool),
-		Trie:  wordfreq.NewTrie(),
+		Name: "test",
+		Trie: wordfreq.NewTrie(),
 	}
 
 	words := []string{"hello", "world", "help", "he", "at", "cat"}
 	for _, w := range words {
-		wl.Words[w] = true
 		wl.Trie.Insert(w)
 	}
 
