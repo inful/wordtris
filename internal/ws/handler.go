@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,25 +20,7 @@ const (
 	pongTimeout  = PongTimeout
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  ReadBufferSize,
-	WriteBufferSize: WriteBufferSize,
-	CheckOrigin: func(r *http.Request) bool {
-		// Allow localhost and development environments only
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // Allow requests without Origin header
-		}
-		// Check for localhost origins only
-		allowedOrigins := map[string]bool{
-			"http://localhost:8080": true,
-			"http://127.0.0.1:8080": true,
-			"http://localhost:3000": true,
-			"http://127.0.0.1:3000": true,
-		}
-		return allowedOrigins[origin]
-	},
-}
+
 
 type Hub struct {
 	manager     *room.Manager
@@ -47,6 +30,7 @@ type Hub struct {
 	broadcast   chan *BroadcastMessage
 	mutex       sync.RWMutex
 	playerRooms map[string]string
+	upgrader    websocket.Upgrader
 }
 
 type BroadcastMessage struct {
@@ -65,7 +49,22 @@ type Client struct {
 	mutex      sync.Mutex
 }
 
-func NewHub(manager *room.Manager) *Hub {
+func NewHub(manager *room.Manager, baseURL string) *Hub {
+	allowedOrigins := map[string]bool{
+		"http://localhost:8080":  true,
+		"http://127.0.0.1:8080": true,
+		"http://localhost:3000":  true,
+		"http://127.0.0.1:3000": true,
+	}
+	if baseURL != "" {
+		allowedOrigins[baseURL] = true
+		// also allow https variant if http was given, and vice versa
+		if strings.HasPrefix(baseURL, "http://") {
+			allowedOrigins["https://"+baseURL[len("http://"):]] = true
+		} else if strings.HasPrefix(baseURL, "https://") {
+			allowedOrigins["http://"+baseURL[len("https://"):]] = true
+		}
+	}
 	return &Hub{
 		manager:     manager,
 		clients:     make(map[string]*Client),
@@ -73,6 +72,17 @@ func NewHub(manager *room.Manager) *Hub {
 		unregister:  make(chan *Client),
 		broadcast:   make(chan *BroadcastMessage, BroadcastBufSize),
 		playerRooms: make(map[string]string),
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  ReadBufferSize,
+			WriteBufferSize: WriteBufferSize,
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true
+				}
+				return allowedOrigins[origin]
+			},
+		},
 	}
 }
 
@@ -110,7 +120,7 @@ func (h *Hub) Run() {
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return

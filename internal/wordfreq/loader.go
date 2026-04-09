@@ -2,6 +2,7 @@ package wordfreq
 
 import (
 	"bufio"
+	"compress/gzip"
 	"io"
 	"io/fs"
 	"os"
@@ -28,13 +29,21 @@ func LoadWordLists(dir string) (map[string]*WordList, error) {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+		if entry.IsDir() {
+			continue
+		}
+		fileName := entry.Name()
+		var name string
+		switch {
+		case strings.HasSuffix(fileName, ".txt.gz"):
+			name = strings.TrimSuffix(fileName, ".txt.gz")
+		case strings.HasSuffix(fileName, ".txt"):
+			name = strings.TrimSuffix(fileName, ".txt")
+		default:
 			continue
 		}
 
-		filePath := filepath.Join(dir, entry.Name())
-		name := strings.TrimSuffix(entry.Name(), ".txt")
-
+		filePath := filepath.Join(dir, fileName)
 		wl, err := loadWordList(filePath, name)
 		if err != nil {
 			continue
@@ -52,6 +61,14 @@ func loadWordList(filePath, name string) (*WordList, error) {
 		return nil, err
 	}
 	defer file.Close()
+	if strings.HasSuffix(filePath, ".gz") {
+		gr, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, err
+		}
+		defer gr.Close()
+		return loadWordListReader(gr, name)
+	}
 	return loadWordListReader(file, name)
 }
 
@@ -65,16 +82,38 @@ func LoadWordListsFS(fsys fs.FS, dir string) (map[string]*WordList, error) {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+		if entry.IsDir() {
+			continue
+		}
+		fileName := entry.Name()
+		var name string
+		switch {
+		case strings.HasSuffix(fileName, ".txt.gz"):
+			name = strings.TrimSuffix(fileName, ".txt.gz")
+		case strings.HasSuffix(fileName, ".txt"):
+			name = strings.TrimSuffix(fileName, ".txt")
+		default:
 			continue
 		}
 
-		name := strings.TrimSuffix(entry.Name(), ".txt")
-		f, err := fsys.Open(dir + "/" + entry.Name())
+		f, err := fsys.Open(dir + "/" + fileName)
 		if err != nil {
 			continue
 		}
-		wl, err := loadWordListReader(f, name)
+		var r io.Reader = f
+		var gr *gzip.Reader
+		if strings.HasSuffix(fileName, ".gz") {
+			gr, err = gzip.NewReader(f)
+			if err != nil {
+				f.Close()
+				continue
+			}
+			r = gr
+		}
+		wl, err := loadWordListReader(r, name)
+		if gr != nil {
+			gr.Close()
+		}
 		f.Close()
 		if err != nil {
 			continue

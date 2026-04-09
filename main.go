@@ -46,7 +46,20 @@ func main() {
 	}
 
 	roomManager = room.NewManager(wordLists)
-	wsHub = ws.NewHub(roomManager)
+
+	port := 8080
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil {
+			port = n
+		}
+	}
+
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://localhost:%d", port)
+	}
+
+	wsHub = ws.NewHub(roomManager, baseURL)
 
 	go wsHub.Run()
 
@@ -62,18 +75,6 @@ func main() {
 		log.Fatal("embed static sub:", err)
 	}
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
-
-	port := 8080
-	if p := os.Getenv("PORT"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			port = n
-		}
-	}
-
-	baseURL := os.Getenv("BASE_URL")
-	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://localhost:%d", port)
-	}
 
 	log.Printf("WordTris server starting on %s", baseURL)
 	log.Printf("Word lists available: %v", getWordListNames(wordLists))
