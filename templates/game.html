@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WordTris - Game</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="game-container">
+        <header class="game-header">
+            <h1>WordTris</h1>
+            <div class="room-info">
+                Room: <span id="roomCodeDisplay"></span>
+            </div>
+        </header>
+
+        <div class="game-content">
+            <div class="main-panel">
+                <div class="board-container">
+                    <div id="gameBoard" class="game-board"></div>
+                </div>
+            </div>
+
+            <div class="side-panel">
+                <div class="players-section">
+                    <h3>Players</h3>
+                    <div id="playersList" class="players-list"></div>
+                </div>
+
+                <div class="nearest-section">
+                    <h3>Nearest Words</h3>
+                    <div id="nearestWords" class="nearest-words"></div>
+                </div>
+
+                <div class="score-section">
+                    <h3>Your Score</h3>
+                    <div id="myScore" class="my-score">0</div>
+                </div>
+
+                <div id="timerSection" class="timer-section hidden">
+                    <h3>Time Left</h3>
+                    <div id="timerDisplay" class="timer-display">--:--</div>
+                </div>
+
+                <div id="dropCooldownSection" class="drop-cooldown-section hidden">
+                    <div id="dropCooldownDisplay" class="drop-cooldown-display">5s</div>
+                    <div class="drop-cooldown-label">Drop cooldown</div>
+                </div>
+
+                <div class="recent-words-section">
+                    <h3>Recent Words</h3>
+                    <div id="recentWords" class="recent-words"></div>
+                </div>
+
+                <div id="gameStatus" class="game-status hidden"></div>
+            </div>
+        </div>
+
+        <div id="gameOverModal" class="modal hidden">
+            <div class="modal-content">
+                <h2>Game Over!</h2>
+                <div id="winnerDisplay"></div>
+                <div id="finalScores"></div>
+                <a href="/" class="btn btn-primary">Back to Lobby</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BOARD_WIDTH = 10;
+        const BOARD_HEIGHT = 20;
+
+        let ws = null;
+        let myId = null;
+        let playerName = null;
+        let roomCode = null;
+        let isHost = false;
+        let currentBlock = null;
+        let rotationState = 0; // 0=horiz-normal, 1=vert-normal, 2=horiz-reversed, 3=vert-reversed
+        let board = [];
+        let gameState = 'waiting';
+        let players = [];
+        let recentWords = []; // {word, score} newest first, max 5
+        let reconnectAttempts = 0;
+        let reconnectTimer = null;
+        let isConnecting = false;
+        let suspended = false;
+        let currentBlockX = 0;
+        let currentBlockY = 0;
+        let dropInterval = null;
+        const DROP_SPEED = 500;
+        let dropCooldownUntil = 0;  // Date.now() ms timestamp
+        let dropCooldownInterval = null;
+        let timeLimitSeconds = 0;
+        let gameStartTime = null;
+        let timerInterval = null;
+        let nearestWordData = []; // latest nearest_words payload
+
+        function startDropCooldown(seconds) {
+            dropCooldownUntil = Date.now() + seconds * 1000;
+            document.getElementById('dropCooldownSection').classList.remove('hidden');
+            updateDropCooldownDisplay();
+            if (dropCooldownInterval) clearInterval(dropCooldownInterval);
+            dropCooldownInterval = setInterval(() => {
+                if (Date.now() >= dropCooldownUntil) {
+                    clearInterval(dropCooldownInterval);
+                    dropCooldownInterval = null;
+                    dropCooldownUntil = 0;
+                    document.getElementById('dropCooldownSection').classList.add('hidden');
+                } else {
+                    updateDropCooldownDisplay();
+                }
+            }, 250);
+        }
+
+        function updateDropCooldownDisplay() {
+            const remaining = Math.max(0, Math.ceil((dropCooldownUntil - Date.now()) / 1000));
+            document.getElementById('dropCooldownDisplay').textContent = remaining + 's';
+        }
+
+        function isDropCooldownActive() {
+            return Date.now() < dropCooldownUntil;
+        }
+
+        function startCountdown(seconds) {
+            timeLimitSeconds = seconds;
+            gameStartTime = Date.now();
+            document.getElementById('timerSection').classList.remove('hidden');
+            updateTimerDisplay();
+            timerInterval = setInterval(updateTimerDisplay, 500);
+        }
+
+        function stopCountdown() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+        }
+
+        function updateTimerDisplay() {
+            const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+            const remaining = Math.max(0, timeLimitSeconds - elapsed);
+            const mins = Math.floor(remaining / 60);
+            const secs = remaining % 60;
+            document.getElementById('timerDisplay').textContent =
+                `${mins}:${secs.toString().padStart(2, '0')}`;
+            const el = document.getElementById('timerDisplay');
+            if (remaining <= 10) {
+                el.classList.add('timer-urgent');
+            } else {
+                el.classList.remove('timer-urgent');
+            }
+        }
+
+        function initBoard() {
+            const boardEl = document.getElementById('gameBoard');
+            boardEl.innerHTML = '';
+            boardEl.style.gridTemplateColumns = `repeat(${BOARD_WIDTH}, 1fr)`;
+            boardEl.style.gridTemplateRows = `repeat(${BOARD_HEIGHT}, 1fr)`;
+            
+            board = [];
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                board[y] = [];
+                for (let x = 0; x < BOARD_WIDTH; x++) {
+                    board[y][x] = '';
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    boardEl.appendChild(cell);
+                }
+            }
+        }
+
+        function charType(ch) {
+            if (!ch) return 'other';
+            const c = ch.toUpperCase();
+            if ('AEIOU'.includes(c)) return 'vowel';
+            if (c >= 'A' && c <= 'Z') return 'consonant';
+            return 'other';
+        }
+
+        function updateBoard(boardData) {
+            if (!boardData) return;
+            for (let y = 0; y < Math.min(boardData.length, BOARD_HEIGHT); y++) {
+                for (let x = 0; x < Math.min(boardData[y].length, BOARD_WIDTH); x++) {
+                    const cell = document.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+                    if (cell) {
+                        const value = boardData[y][x];
+                        board[y][x] = value;
+                        cell.textContent = value;
+                        cell.classList.toggle('filled', value !== '');
+                        if (value !== '') {
+                            cell.dataset.charType = charType(value);
+                        } else {
+                            delete cell.dataset.charType;
+                        }
+                    }
+                }
+            }
+        }
+
+        function showPlacementPreview(x, y) {
+            if (!currentBlock || gameState !== 'playing') return;
+            clearPlacementPreview();
+            
+            const positions = getBlockPositions(x, y);
+            positions.forEach(pos => {
+                if (pos.x >= 0 && pos.x < BOARD_WIDTH && pos.y >= 0 && pos.y < BOARD_HEIGHT) {
+                    const cell = document.querySelector(`.cell[data-x="${pos.x}"][data-y="${pos.y}"]`);
+                    if (cell && board[pos.y][pos.x] === '') {
+                        cell.classList.add('preview');
+                    }
+                }
+            });
+        }
+
+        function clearPlacementPreview() {
+            document.querySelectorAll('.cell.preview').forEach(cell => {
+                cell.classList.remove('preview');
+            });
+        }
+
+        function getBlockPositions(x, y) {
+            const isVertical = rotationState === 1 || rotationState === 3;
+            if (isVertical) {
+                return [
+                    { x, y },
+                    { x, y: y + 1 }
+                ];
+            }
+            return [
+                { x, y },
+                { x: x + 1, y }
+            ];
+        }
+
+        // Returns char indices [i0, i1] for positions[0] and positions[1]
+        function getCharOrder() {
+            // States 2 and 3 have reversed character order
+            return (rotationState === 2 || rotationState === 3) ? [1, 0] : [0, 1];
+        }
+
+        function updateNextBlock(block) {
+            if (!block) { return; }
+            if (!block.chars || block.chars.length === 0) { return; }
+            currentBlock = block;
+            rotationState = block.rotation || 0;
+            currentBlockX = Math.floor(BOARD_WIDTH / 2) - 1;
+            currentBlockY = 0;
+            
+            showFallingBlock();
+            startDropTimer();
+        }
+        
+        function startDropTimer() {
+            if (dropInterval) clearInterval(dropInterval);
+            dropInterval = setInterval(dropBlock, DROP_SPEED);
+        }
+        
+        function dropBlock() {
+            if (!currentBlock || gameState !== 'playing') return;
+            
+            const nextY = currentBlockY + 1;
+            const nextPositions = getBlockPositions(currentBlockX, nextY);
+            
+            let canMove = true;
+            for (const pos of nextPositions) {
+                if (pos.y >= BOARD_HEIGHT || board[pos.y][pos.x] !== '') {
+                    canMove = false;
+                    break;
+                }
+            }
+            
+            if (canMove) {
+                currentBlockY = nextY;
+                showFallingBlock();
+            } else {
+                lockBlock();
+            }
+        }
+        
+        function lockBlock() {
+            if (!currentBlock || gameState !== 'playing') return;
+            
+            // Clear immediately to prevent the drop timer from firing a second placement
+            // before the server's block_placed response arrives.
+            if (dropInterval) {
+                clearInterval(dropInterval);
+                dropInterval = null;
+            }
+            const block = currentBlock;
+            currentBlock = null;
+            clearFallingBlock();
+
+            ws.send(JSON.stringify({
+                type: 'place_block',
+                x: currentBlockX,
+                y: currentBlockY,
+                rotation: rotationState
+            }));
+        }
+        
+        function showFallingBlock() {
+            clearFallingBlock();
+            if (!currentBlock) return;
+            
+            const positions = getBlockPositions(currentBlockX, currentBlockY);
+            const charOrder = getCharOrder();
+            positions.forEach((pos, i) => {
+                if (pos.x >= 0 && pos.x < BOARD_WIDTH && pos.y >= 0 && pos.y < BOARD_HEIGHT) {
+                    const cell = document.querySelector(`.cell[data-x="${pos.x}"][data-y="${pos.y}"]`);
+                    if (cell && board[pos.y][pos.x] === '') {
+                        cell.classList.add('falling');
+                        const ch = currentBlock.chars[charOrder[i]];
+                        cell.textContent = ch;
+                        cell.dataset.charType = charType(ch);
+                    }
+                }
+            });
+        }
+        
+        function clearFallingBlock() {
+            document.querySelectorAll('.cell.falling').forEach(cell => {
+                cell.classList.remove('falling');
+                cell.textContent = '';
+                delete cell.dataset.charType;
+            });
+        }
+
+        function updatePlayersList(playersData) {
+            players = playersData;
+            const list = document.getElementById('playersList');
+            list.innerHTML = '';
+            
+            [...players].sort((a, b) => b.score - a.score).forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'player-item' + (p.id === myId ? ' me' : '');
+                div.innerHTML = `<span class="player-name">${escapeHtml(p.name)}</span><span class="player-score">${p.score}</span>`;
+                list.appendChild(div);
+            });
+        }
+
+        function updateScore(score) {
+            document.getElementById('myScore').textContent = score;
+            // Keep players list in sync
+            players = players.map(p => p.id === myId ? { ...p, score } : p);
+            updatePlayersList(players);
+        }
+
+        function addRecentWords(scoredWords) {
+            // Only keep words that actually scored, prepend newest, keep last 5
+            const scoring = scoredWords.filter(sw => sw.score > 0);
+            recentWords = [...scoring.slice().reverse(), ...recentWords].slice(0, 5);
+            const container = document.getElementById('recentWords');
+            container.innerHTML = '';
+            recentWords.forEach(sw => {
+                const div = document.createElement('div');
+                div.className = 'recent-word';
+                div.innerHTML = `<span class="recent-word-text">${escapeHtml(sw.word)}</span><span class="recent-word-score">+${sw.score}</span>`;
+                container.appendChild(div);
+            });
+        }
+
+        function clearNearestHighlights() {
+            document.querySelectorAll('.cell.nearest-hint, .cell.nearest-hint-active').forEach(cell => {
+                cell.classList.remove('nearest-hint', 'nearest-hint-active');
+            });
+        }
+
+        function applyNearestHighlights() {
+            clearNearestHighlights();
+            nearestWordData.forEach(w => {
+                if (!w.matched_positions) return;
+                w.matched_positions.forEach(([x, y]) => {
+                    const cell = document.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+                    if (cell) cell.classList.add('nearest-hint');
+                });
+            });
+        }
+
+        function updateNearestWords(words) {
+            nearestWordData = words || [];
+            const container = document.getElementById('nearestWords');
+            container.innerHTML = '';
+            
+            if (!words || words.length === 0) {
+                container.innerHTML = '<div class="no-words">No matches yet</div>';
+                applyNearestHighlights();
+                return;
+            }
+            
+            words.forEach(w => {
+                const div = document.createElement('div');
+                div.className = 'nearest-word';
+                const progress = Math.round((w.chars_matched / (w.chars_matched + w.gaps)) * 100);
+                div.innerHTML = `
+                    <span class="word-text">${escapeHtml(w.word)}</span>
+                    <span class="word-progress">${progress}%</span>
+                `;
+                div.addEventListener('mouseenter', () => {
+                    clearNearestHighlights();
+                    if (w.matched_positions) {
+                        w.matched_positions.forEach(([x, y]) => {
+                            const cell = document.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+                            if (cell) cell.classList.add('nearest-hint-active');
+                        });
+                    }
+                });
+                div.addEventListener('mouseleave', () => {
+                    applyNearestHighlights();
+                });
+                container.appendChild(div);
+            });
+
+            applyNearestHighlights();
+        }
+
+        function showGameOver(winner) {
+            const modal = document.getElementById('gameOverModal');
+            const winnerDisplay = document.getElementById('winnerDisplay');
+            const finalScores = document.getElementById('finalScores');
+            
+            if (winner) {
+                winnerDisplay.innerHTML = `<div class="winner">Winner: ${escapeHtml(winner.name)} with ${winner.score} points!</div>`;
+            } else {
+                winnerDisplay.innerHTML = '<div class="winner">Game Over!</div>';
+            }
+            
+            finalScores.innerHTML = '<h4>Final Scores:</h4>';
+            players.forEach(p => {
+                finalScores.innerHTML += `<div>${escapeHtml(p.name)}: ${p.score}</div>`;
+            });
+            
+            modal.classList.remove('hidden');
+            gameState = 'ended';
+            // Clear game state on game over
+            setTimeout(() => {
+                localStorage.removeItem('playerId');
+                localStorage.removeItem('roomCode');
+                localStorage.removeItem('playerName');
+            }, 3000);
+        }
+
+        function showBoardFull() {
+            document.getElementById('gameStatus').textContent = 'Board Full! Game Over for you.';
+            document.getElementById('gameStatus').classList.remove('hidden');
+            gameState = 'ended';
+        }
+
+        function connectWebSocket() {
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            if (!roomCode || !myId) {
+                console.error('Cannot connect: roomCode or myId is not set', { roomCode, myId });
+                return;
+            }
+            // Prevent rapid reconnection attempts
+            if (isConnecting) {
+                return;
+            }
+            isConnecting = true;
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                isConnecting = false;
+                reconnectAttempts = 0;
+                // Always use rejoin with stored myId and roomCode from localStorage
+                ws.send(JSON.stringify({
+                    type: 'rejoin_room',
+                    player_id: myId,
+                    room_code: roomCode
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                handleMessage(msg);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = (event) => {
+                // Don't reconnect if we got a fatal error
+                if (reconnectAttempts >= 100) {
+                    return;
+                }
+                // Reconnect while in room unless game is ended; if suspended, wait for resume.
+                if (document.hidden || suspended) {
+                    return;
+                }
+                if (roomCode && myId && gameState !== 'ended' && !reconnectTimer && !isConnecting) {
+                    scheduleReconnect();
+                }
+            };
+        }
+
+        function scheduleReconnect() {
+            if (reconnectTimer) return;
+            reconnectAttempts++;
+            if (reconnectAttempts > 10) {
+                showBoardFull();
+                document.getElementById('gameStatus').textContent = 'Connection lost. Please refresh to try again.';
+                return;
+            }
+            const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 10000);
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connectWebSocket();
+            }, delay);
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'room_joined':
+                    myId = msg.data.your_id;
+                    localStorage.setItem('playerId', myId);
+                    roomCode = msg.data.room_code;
+                    localStorage.setItem('roomCode', roomCode);
+                    playerName = msg.data.player_name;
+                    document.getElementById('roomCodeDisplay').textContent = roomCode;
+                    updatePlayersList(msg.data.players);
+                    break;
+
+                case 'room_state':
+                    myId = msg.data.your_id;
+                    localStorage.setItem('playerId', myId);
+                    roomCode = msg.data.room_code;
+                    localStorage.setItem('roomCode', roomCode);
+                    gameState = msg.data.game_state;
+                    players = msg.data.players;
+                    updatePlayersList(players);
+                    document.getElementById('roomCodeDisplay').textContent = roomCode;
+                    if (msg.data.board) {
+                        updateBoard(msg.data.board);
+                    }
+                    if (gameState === 'playing') {
+                        if (msg.data.next_block) {
+                            updateNextBlock(msg.data.next_block);
+                        }
+                        if (msg.data.time_limit_seconds > 0 && msg.data.time_remaining_seconds > 0) {
+                            stopCountdown();
+                            startCountdown(msg.data.time_remaining_seconds);
+                        }
+                        document.getElementById('gameStatus').textContent = 'Reconnected!';
+                        document.getElementById('gameStatus').classList.remove('hidden');
+                        setTimeout(() => {
+                            document.getElementById('gameStatus').classList.add('hidden');
+                        }, 2000);
+                    }
+                    break;
+
+                case 'game_started':
+                    roomCode = msg.data.room_code;
+                    localStorage.setItem('roomCode', roomCode);
+                    gameState = 'playing';
+                    nearestWordData = [];
+                    initBoard();
+                    updateNextBlock(msg.data.next_block);
+                    updatePlayersList(msg.data.players);
+                    document.getElementById('roomCodeDisplay').textContent = roomCode;
+                    if (msg.data.time_limit_seconds > 0) {
+                        startCountdown(msg.data.time_limit_seconds);
+                    }
+                    break;
+
+                case 'block_placed':
+                    clearFallingBlock();
+                    if (dropInterval) clearInterval(dropInterval);
+                    if (typeof msg.data.score === 'number') {
+                        updateScore(msg.data.score);
+                    }
+                    if (msg.data.scored_words && msg.data.scored_words.length > 0) {
+                        addRecentWords(msg.data.scored_words);
+                    }
+                    if (msg.data.removed_positions && msg.data.removed_positions.length > 0) {
+                        // Show placed block first, then animate removal
+                        if (msg.data.board) { updateBoard(msg.data.board); applyNearestHighlights(); }
+                        animateRemoval(msg.data.removed_positions, () => {
+                            if (msg.data.next_block) updateNextBlock(msg.data.next_block);
+                        });
+                    } else {
+                        if (msg.data.board) { updateBoard(msg.data.board); applyNearestHighlights(); }
+                        if (msg.data.next_block) updateNextBlock(msg.data.next_block);
+                    }
+                    break;
+
+                case 'block_rejected':
+                    alert('Cannot place block there: ' + msg.data.reason);
+                    break;
+
+                case 'nearest_words':
+                    updateNearestWords(msg.data.words);
+                    break;
+
+                case 'board_full':
+                    showBoardFull();
+                    break;
+
+                case 'player_finished':
+                    players = players.map(p => 
+                        p.id === msg.data.player_id 
+                            ? { ...p, score: msg.data.score, finished: true }
+                            : p
+                    );
+                    updatePlayersList(players);
+                    break;
+
+                case 'game_over':
+                    stopCountdown();
+                    showGameOver(msg.data.winner);
+                    break;
+
+                case 'drop_cooldown':
+                    startDropCooldown(msg.data.duration_seconds);
+                    break;
+
+                case 'word_removed':
+                    flashWordRemoval(msg.data.word, msg.data.positions);
+                    break;
+
+                case 'score_update':
+                    players = players.map(p => p.id === msg.data.player_id ? { ...p, score: msg.data.score } : p);
+                    updatePlayersList(players);
+                    break;
+
+                case 'player_joined':
+                    players.push(msg.data.player);
+                    updatePlayersList(players);
+                    break;
+
+                case 'player_left':
+                    players = players.filter(p => p.id !== msg.data.player_id);
+                    updatePlayersList(players);
+                    break;
+
+                case 'error':
+                    console.error('Server error:', msg.data.message);
+                    // Clear game state on fatal errors
+                    if (msg.data.message === 'Room not found' || msg.data.message === 'Player not found in room') {
+                        localStorage.removeItem('playerId');
+                        localStorage.removeItem('roomCode');
+                        localStorage.removeItem('playerName');
+                        reconnectAttempts = 100; // Prevent further reconnection attempts
+                        document.getElementById('gameStatus').textContent = msg.data.message + '. Returning to lobby...';
+                        document.getElementById('gameStatus').classList.remove('hidden');
+                        setTimeout(() => window.location.href = '/', 2000);
+                    }
+                    break;
+            }
+        }
+
+        function flashWordRemoval(word, positions) {
+            if (!positions) return;
+            positions.forEach(pos => {
+                const cell = document.querySelector(`.cell[data-x="${pos.x}"][data-y="${pos.y}"]`);
+                if (cell) {
+                    cell.classList.add('flash');
+                    setTimeout(() => cell.classList.remove('flash'), 300);
+                }
+            });
+        }
+
+        function animateRemoval(positions, onDone) {
+            const DURATION = 450;
+            positions.forEach(pos => {
+                const cell = document.querySelector(`.cell[data-x="${pos.x}"][data-y="${pos.y}"]`);
+                if (cell) cell.classList.add('removing');
+            });
+            setTimeout(() => {
+                positions.forEach(pos => {
+                    const cell = document.querySelector(`.cell[data-x="${pos.x}"][data-y="${pos.y}"]`);
+                    if (cell) cell.classList.remove('removing');
+                });
+                onDone();
+            }, DURATION);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        const storedPlayerId = localStorage.getItem('playerId');
+        const storedRoomCode = localStorage.getItem('roomCode');
+        const storedPlayerName = localStorage.getItem('playerName');
+        
+        if (!storedRoomCode || !storedPlayerId) {
+            // No active game - redirect to lobby
+            window.location.href = '/';
+        } else {
+            // Resume existing game
+            myId = storedPlayerId;
+            roomCode = storedRoomCode;
+            playerName = storedPlayerName;
+            document.getElementById('roomCodeDisplay').textContent = roomCode;
+            initBoard();
+            connectWebSocket();
+        }
+
+        // Browser can suspend websocket when tab/page is backgrounded.
+        // Resume by reconnecting when page becomes visible again.
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                suspended = false;
+                if (roomCode && myId && gameState !== 'ended') {
+                    if (!ws || ws.readyState === WebSocket.CLOSED) {
+                        connectWebSocket();
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('pagehide', () => {
+            suspended = true;
+        });
+
+        window.addEventListener('pageshow', () => {
+            suspended = false;
+            if (roomCode && myId && gameState !== 'ended') {
+                if (!ws || ws.readyState === WebSocket.CLOSED) {
+                    connectWebSocket();
+                }
+            }
+        });
+        
+        document.addEventListener('keydown', (e) => {
+            if (!currentBlock || gameState !== 'playing') return;
+            
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    if (canMoveTo(currentBlockX - 1, currentBlockY)) {
+                        currentBlockX--;
+                        showFallingBlock();
+                    }
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    if (canMoveTo(currentBlockX + 1, currentBlockY)) {
+                        currentBlockX++;
+                        showFallingBlock();
+                    }
+                    break;
+                case 'ArrowUp':
+                case 'x':
+                case 'X':
+                    e.preventDefault();
+                    rotateBlock();
+                    break;
+                case 'ArrowDown':
+                case 'z':
+                case 'Z':
+                    e.preventDefault();
+                    if (!isDropCooldownActive()) dropBlock();
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    if (!isDropCooldownActive()) hardDrop();
+                    break;
+            }
+        });
+        
+        function canMoveTo(x, y) {
+            const positions = getBlockPositions(x, y);
+            for (const pos of positions) {
+                if (pos.x < 0 || pos.x >= BOARD_WIDTH || pos.y >= BOARD_HEIGHT) return false;
+                if (pos.y >= 0 && board[pos.y][pos.x] !== '') return false;
+            }
+            return true;
+        }
+        
+        function rotateBlock() {
+            const newRotation = (rotationState + 1) % 4;
+            const positions = getBlockPositions(currentBlockX, currentBlockY);
+            clearFallingBlock();
+            rotationState = newRotation;
+            const newPositions = getBlockPositions(currentBlockX, currentBlockY);
+            
+            let valid = true;
+            for (const pos of newPositions) {
+                if (pos.x < 0 || pos.x >= BOARD_WIDTH || pos.y >= BOARD_HEIGHT) {
+                    valid = false;
+                    break;
+                }
+                if (pos.y >= 0 && board[pos.y][pos.x] !== '') {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (!valid) {
+                rotationState = (newRotation + 3) % 4; // revert
+            }
+            showFallingBlock();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'rotate_block' }));
+            }
+        }
+        
+        function hardDrop() {
+            while (canMoveTo(currentBlockX, currentBlockY + 1)) {
+                currentBlockY++;
+            }
+            lockBlock();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WordTris - Multiplayer Word Block Game</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>WordTris</h1>
+            <p class="subtitle">Multiplayer Word Block Game</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>Create Room</h2>
+                <form id="createForm">
+                    <div class="form-group">
+                        <label for="playerNameCreate">Your Name</label>
+                        <input type="text" id="playerNameCreate" required maxlength="20" placeholder="Enter your name">
+                    </div>
+                    <div class="form-group">
+                        <label for="wordListSelect">Word List</label>
+                        <select id="wordListSelect" required>
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="timeLimitSelect">Time Limit</label>
+                        <select id="timeLimitSelect">
+                            <option value="0">No limit</option>
+                            <option value="120">2 minutes</option>
+                            <option value="300">5 minutes</option>
+                            <option value="600">10 minutes</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Room</button>
+                </form>
+            </div>
+
+            <div class="divider">
+                <span>or</span>
+            </div>
+
+            <div class="card">
+                <h2>Join Room</h2>
+                <form id="joinForm">
+                    <div class="form-group">
+                        <label for="playerNameJoin">Your Name</label>
+                        <input type="text" id="playerNameJoin" required maxlength="20" placeholder="Enter your name">
+                    </div>
+                    <div class="form-group">
+                        <label for="roomCode">Room Code</label>
+                        <input type="text" id="roomCode" required maxlength="6" placeholder="Enter 6-letter code" style="text-transform: uppercase;">
+                    </div>
+                    <button type="submit" class="btn btn-secondary">Join Room</button>
+                </form>
+            </div>
+        </main>
+
+        <div id="roomInfo" class="card hidden">
+            <h2>Room Created</h2>
+            <p>Share this code with your friends:</p>
+            <div class="room-code" id="displayRoomCode"></div>
+            <p class="waiting-text">Waiting for players to join...</p>
+            <div id="playerList"></div>
+            <button id="startGameBtn" class="btn btn-primary hidden">Start Game</button>
+        </div>
+
+        <div id="joinSuccess" class="card hidden">
+            <h2>Joined Room</h2>
+            <p>Room: <span id="joinedRoomCode"></span></p>
+            <p class="waiting-text">Waiting for host to start...</p>
+            <div id="joinedPlayerList"></div>
+        </div>
+
+        <div id="errorMessage" class="error hidden"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let myId = null;
+        let roomCode = null;
+        let isHost = false;
+        let currentWordList = null;
+        let pendingMessage = null;    // message to send once WS is open
+        let inRoom = false;           // true once we've joined/created a room
+        let navigating = false;       // true when navigating to game page
+
+        async function loadWordLists() {
+            try {
+                const response = await fetch('/api/wordlists');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const names = await response.json();
+                const select = document.getElementById('wordListSelect');
+                select.innerHTML = '';
+                if (names.length === 0) {
+                    select.innerHTML = '<option value="">No word lists available</option>';
+                } else {
+                    names.forEach(name => {
+                        const option = document.createElement('option');
+                        option.value = name;
+                        option.textContent = name;
+                        select.appendChild(option);
+                    });
+                    currentWordList = names[0];
+                }
+            } catch (err) {
+                console.error('Failed to load word lists:', err);
+                const select = document.getElementById('wordListSelect');
+                select.innerHTML = '<option value="">Error loading word lists</option>';
+            }
+        }
+
+        document.getElementById('createForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const playerName = document.getElementById('playerNameCreate').value;
+            const wordList = document.getElementById('wordListSelect').value;
+            const timeLimit = parseInt(document.getElementById('timeLimitSelect').value) || 0;
+            if (!wordList) {
+                showError('Please select a word list');
+                return;
+            }
+            sendWhenReady({ type: 'create_room', player_name: playerName, wordlist: wordList, time_limit: timeLimit });
+        });
+
+        document.getElementById('joinForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const playerName = document.getElementById('playerNameJoin').value;
+            const roomCodeInput = document.getElementById('roomCode').value.toUpperCase();
+            sendWhenReady({ type: 'join_room', player_name: playerName, room_code: roomCodeInput });
+        });
+
+        document.getElementById('startGameBtn').addEventListener('click', () => {
+            sendWhenReady({ type: 'start_game' });
+        });
+
+        function sendWhenReady(msg) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(msg));
+            } else {
+                pendingMessage = msg;
+                connectWebSocket();
+            }
+        }
+
+        function connectWebSocket() {
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                if (pendingMessage) {
+                    ws.send(JSON.stringify(pendingMessage));
+                    pendingMessage = null;
+                }
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                handleMessage(msg);
+            };
+
+            ws.onerror = () => {
+                if (!navigating) showError('Connection error. Please try again.');
+            };
+
+            ws.onclose = () => {
+                if (navigating) return;
+                // If we have an active room and need to reconnect, do so
+                if (inRoom && myId && roomCode) {
+                    pendingMessage = { type: 'rejoin_room', player_id: myId, room_code: roomCode };
+                    setTimeout(connectWebSocket, 1000);
+                }
+            };
+        }
+
+        // Reconnect on visibility restore (browser tab resume)
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && inRoom) {
+                connectWebSocket();
+            }
+        });
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'room_created':
+                    myId = msg.data.your_id;
+                    roomCode = msg.data.room_code;
+                    isHost = true;
+                    inRoom = true;
+                    const hostPlayer = msg.data.players.find(p => p.id === myId);
+                    localStorage.setItem('playerId', myId);
+                    localStorage.setItem('roomCode', roomCode);
+                    localStorage.setItem('playerName', hostPlayer?.name || 'Player');
+                    document.getElementById('displayRoomCode').textContent = roomCode;
+                    document.getElementById('createForm').parentElement.classList.add('hidden');
+                    document.getElementById('joinForm').parentElement.classList.add('hidden');
+                    document.getElementById('roomInfo').classList.remove('hidden');
+                    document.getElementById('startGameBtn').classList.remove('hidden');
+                    updatePlayerList(msg.data.players);
+                    break;
+
+                case 'room_joined':
+                    myId = msg.data.your_id;
+                    roomCode = msg.data.room_code;
+                    currentWordList = msg.data.wordlist;
+                    inRoom = true;
+                    localStorage.setItem('playerId', myId);
+                    localStorage.setItem('roomCode', roomCode);
+                    localStorage.setItem('playerName', msg.data.players.find(p => p.id === myId)?.name || 'Player');
+                    document.getElementById('joinedRoomCode').textContent = roomCode;
+                    document.getElementById('createForm').parentElement.classList.add('hidden');
+                    document.getElementById('joinForm').parentElement.classList.add('hidden');
+                    document.getElementById('joinSuccess').classList.remove('hidden');
+                    updatePlayerList(msg.data.players);
+                    break;
+
+                case 'player_joined':
+                    addPlayerToList(msg.data.player);
+                    break;
+
+                case 'player_left':
+                    removePlayerFromList(msg.data.player_id);
+                    break;
+
+                case 'game_started':
+                    navigating = true;
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.onclose = null;
+                        ws.close(1000, 'Navigating to game');
+                    }
+                    window.location.href = '/game?room=' + roomCode;
+                    break;
+
+                case 'error':
+                    showError(msg.data.message);
+                    break;
+            }
+        }
+
+        function updatePlayerList(players) {
+            const list = document.getElementById('joinedPlayerList') || document.getElementById('playerList');
+            if (!list) {
+                return;
+            }
+            list.innerHTML = '<h3>Players</h3>';
+            players.forEach(p => {
+                list.innerHTML += `<div class="player-item">${escapeHtml(p.name)}</div>`;
+            });
+        }
+
+        function addPlayerToList(player) {
+            const list = document.getElementById('playerList');
+            if (list) {
+                list.innerHTML += `<div class="player-item" id="player-${player.id}">${escapeHtml(player.name)}</div>`;
+            }
+        }
+
+        function removePlayerFromList(playerId) {
+            const el = document.getElementById(`player-${playerId}`);
+            if (el) el.remove();
+        }
+
+        function showError(message) {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+            setTimeout(() => errorEl.classList.add('hidden'), 5000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadWordLists();
+    </script>
+</body>
+</html>

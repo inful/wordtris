@@ -1,0 +1,17 @@
+# Binaries
+wordtris-bin
+tmp/
+
+# Go build cache
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go workspace
+go.work
+go.work.sum
